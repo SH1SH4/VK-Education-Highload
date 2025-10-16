@@ -116,31 +116,66 @@ DNS-сервер не эффективен в пределах одной стр
 
 Объявляем одинаковые ip в ДЦ Москвы и Дальнего востока, когда пользователь пытается подключиться к нашему сервису он подключается по ip, остальное дело за BGP который сам выберет ближайший к пользователю ДЦ
 
-# 4. Локальная Балансировка
+# 4. Локальная балансировка нагрузки (Rutube, 1 ДЦ)
 
-### Уровень 1 — L4 (Transport Layer, TCP/UDP)
-Назначение: распределение трафика на уровне транспортного протокола между пулом серверов.  
-Функции: балансировка по IP/портам, поддержка SSL passthrough (шифрование остаётся на серверах), высокая пропускная способность (network limit на узел 400–800 Гбит/с).  
-Резервирование: N+1 активных балансировщиков. Формула расчёта резервирования: N_effective = (N * 2) / (N + 1).
+## Исходные показатели
 
-### Уровень 2 — L7 (Application Layer, HTTP/HTTPS)
-Назначение: распределение HTTP/HTTPS-запросов на уровне приложений.  
-Функции: SSL Termination, балансировка по URL, cookies, headers, интеллектуальные алгоритмы (Least Connections, Weighted, Content-based routing).  
-Резервирование: N+1 или Active/Passive, горячие резервы для отказоустойчивости. Пропускная способность узла: 10–40 Гбит/с с аппаратным ускорением SSL.
+| Параметр | Значение |
+|-----------|-----------|
+| Пиковый трафик (видео) | **31 200 Gbit/s** |
+| Пиковый трафик (API / статистика и прочее) | **300 Gbit/s** |
+| Архитектура | **L4 (видео)** + **L7 (API, статистика, TLS)** |
+| Политика резервирования | **N + 1** |
+| Размещение | **все ноды в одном ДЦ** |
 
-## 2. Расчёт количества балансировщиков
+---
 
-Дано: пиковая нагрузка 32 000 Гбит/с, L4 LB 500 Гбит/с на узел, L7 LB 30 Гбит/с на узел (SSL Termination).
+## Формулы расчёта
 
-Шаг 1 — L4: количество активных LB = 32 000 / 500 = 64.  
-С резервированием N+1 → добавить 1 LB → всего 65 L4 LB.  
-Каждый L4 LB — реальный физический узел, который может обрабатывать до 500 Гбит/с.
+1. Количество нод по пропускной способности:  
+   **LB_bw = Peak_Gbps / Throughput_per_node (округление вверх)**
 
-Шаг 2 — L7: количество активных LB = 32 000 / 30 ≈ 1067.  
-С резервированием N+1 → добавить 1 LB → всего 1068 L7 LB.  
-Для SSL Termination требуется большое количество узлов с аппаратным ускорением SSL.
+2. Применение резервирования (N + 1):  
+   **LB_final = LB_bw + 1**
 
+---
 
+## Расчёт для L4 (видеопоток)
+
+| Показатель | Значение |
+|-------------|-----------|
+| Peak_Gbps_L4 | **31 200 Gbit/s** |
+| Пропускная способность одной L4-ноды | **400 Gbit/s** |
+
+LB_bw_L4 = 31 200 / 400 = 78  
+LB_final_L4 = 78 + 1 = **79 нод**
+
+**Итого (L4, единый ДЦ): 79 нод (все в одном ДЦ).**
+
+---
+
+## Расчёт для L7 (API / статистика / TLS)
+
+| Показатель | Значение |
+|-------------|-----------|
+| Peak_Gbps_L7 | **300 Gbit/s** |
+| Пропускная способность одной L7-ноды | **40 Gbit/s** |
+
+LB_bw_L7 = 300 / 40 = 7.5 → 8 нод  
+LB_final_L7 = 8 + 1 = **9 нод**
+
+**Итого (L7, единый ДЦ): 9 нод (все в одном ДЦ).**
+
+---
+
+## Итоговая сводка (в одном ДЦ)
+
+| Слой | Пиковая нагрузка | Пропускная способность ноды | Резервирование | Всего нод |
+|------|------------------|-----------------------------|----------------|----------:|
+| **L4 (видео)** | 31 200 Gbit/s | 400 Gbit/s | N+1 | **79** |
+| **L7 (API, статистика)** | 300 Gbit/s | 40 Gbit/s | N+1 | **9** |
+
+---
 
 # 5. Логическая схема БД
 ``` mermaid
@@ -276,7 +311,6 @@ erDiagram
 
 # 6 пункт какой он там
 ```mermaid
-
 graph LR
 
 subgraph PostgreSQL_Auth["Auth DB : PostgreSQL"]
@@ -307,9 +341,10 @@ subgraph MinIO["Object Storage : MinIO / S3"]
 end
 
 subgraph Elasticsearch["Search Engine : Elasticsearch"]
-    SI[(search_index)]
+    SI[(video_search_index)]
 end
 
+%% Relations
 U --> V
 U --> VW
 U --> L
@@ -337,32 +372,33 @@ VS:::shard
 
 ```
 
-| Таблица                    | Назначение                       | Основные поля                                                                          | Индексы                                           | Шардирование               | СУБД               |
-| -------------------------- | -------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------- | -------------------------- | ------------------ |
-| **users**                  | Пользователи платформы           | `id`, `username`, `email`, `password_hash`, `created_at`                               | `username (UNIQUE)`, `email (UNIQUE)`             | Hash по `id`               | PostgreSQL (Auth)  |
-| **subscriptions**          | Подписки между пользователями    | `subscriber_id`, `subscribed_to_id`, `created_at`                                      | Композитный (`subscriber_id`, `subscribed_to_id`) | нет                        | PostgreSQL (Auth)  |
-| **moderators**             | Список модераторов и их роль     | `user_id`, `role`                                                                      | `user_id`                                         | нет                        | PostgreSQL (Auth)  |
-| **videos**                 | Метаданные видео                 | `id`, `user_id`, `title`, `description`, `upload_date`, `duration`                     | `user_id`, GIN(`title`, `description`)            | Hash по `id`               | PostgreSQL (Video) |
-| **video_storage_metadata** | Метаданные файлов в MinIO        | `video_id`, `bucket`, `object_key`, `resolution`, `format`, `checksum`                 | `video_id`, `bucket`                              | Hash по `bucket`           | PostgreSQL (Video) |
-| **video_stats**            | Агрегаты просмотров/лайков       | `video_id`, `total_views`, `total_likes`, `updated_at`                                 | `video_id (UNIQUE)`                               | Hash по `video_id`         | PostgreSQL (Video) |
-| **search_index**           | Поисковый индекс видео           | `video_id`, `keywords`, `tags`, `search_vector`                                        | GIN по `search_vector`                            | нет                        | PostgreSQL (Video) |
-| **views**                  | История просмотров               | `video_id`, `user_id`, `view_date`                                                     | PRIMARY KEY (`video_id`, `user_id`)               | Shard по `video_id`        | ClickHouse         |
-| **likes**                  | Таблица лайков                   | `video_id`, `user_id`, `created_at`                                                    | PRIMARY KEY (`video_id`, `user_id`)               | Shard по `video_id`        | ClickHouse         |
-| **comments**               | Комментарии и ответы             | `id`, `video_id`, `user_id`, `parent_comment_id`, `is_banned`, `created_at`            | PRIMARY KEY (`video_id`, `created_at`)            | Shard по `video_id`        | ClickHouse         |
-| **reports**                | Жалобы                           | `reporter_id`, `target_user_id`, `target_video_id`, `target_comment_id`, `is_resolved` | PRIMARY KEY (`reporter_id`, `created_at`)         | Shard по `video_id`        | ClickHouse         |
-| **sessions**               | Активные пользовательские сессии | `session_id`, `user_id`, `expires_at`, `session_data`                                  | TTL по `expires_at`                               | нет                        | Redis              |
-| **video_files (S3/MinIO)** | Объекты видеофайлов              | — (S3 metadata)                                                                        | —                                                 | Erasure coded / replicated | MinIO              |
+| Хранилище                   | Таблица / Индекс         | Назначение                                                                                 |
+| --------------------------- | ------------------------ | ------------------------------------------------------------------------------------------ |
+| **PostgreSQL (AuthDB)**     | `users`                  | Профили пользователей, авторизация, связь с сессиями                                       |
+|                             | `subscriptions`          | Подписки на других пользователей                                                           |
+|                             | `moderators`             | Роли и доступы модераторов                                                                 |
+| **PostgreSQL (VideoDB)**    | `videos`                 | Метаданные видео (название, описание, ID владельца, дата загрузки, флаги модерации)        |
+|                             | `video_stats`            | Счётчики лайков, просмотров и комментариев по видео (для ускоренного доступа)              |
+|                             | `video_storage_metadata` | Служебные данные о хранении файлов в MinIO: путь, версия, формат, thumbnail                |
+| **ClickHouse (ActivityDB)** | `views`                  | Подробные события просмотров (user_id, video_id, timestamp)                                |
+|                             | `likes`                  | События лайков с точными временными метками                                                |
+|                             | `comments`               | Комментарии и иерархия ответов                                                             |
+|                             | `reports`                | Репорты на контент или пользователей                                                       |
+| **Redis**                   | `sessions`               | Авторизационные токены / refresh-токены / CSRF-защита / TTL                                |
+| **MinIO (S3 совместимое)**  | `video_files`            | Файлы видео, превью, thumbnails — хранятся по UUID                                         |
+| **Elasticsearch**           | `video_search_index`     | Полнотекстовый индекс: названия, описания, теги, имена авторов (для поиска и рекомендаций) |
+
 
 ## Индексы
 
 ### PostgreSQL
-| Таблица         | Индекс                              | Тип            |
-| --------------- | ----------------------------------- | -------------- |
-| `users`         | `email`, `username`                 | BTREE          |
-| `videos`        | `title`, `description`              | GIN (fulltext) |
-| `video_stats`   | `video_id`                          | BTREE          |
-| `search_index`  | `search_vector`                     | GIN            |
-| `subscriptions` | `(subscriber_id, subscribed_to_id)` | BTREE          |
+| Таблица         | Индекс                              | Тип   |
+| --------------- | ----------------------------------- | ----- |
+| `users`         | `email`, `username`                 | BTREE |
+| `videos`        | `upload_date`                       | BTREE |
+| `video_stats`   | `video_id`                          | BTREE |
+| `subscriptions` | `(subscriber_id, subscribed_to_id)` | BTREE |
+
 
 ### Clickhouse
 | Таблица    | PRIMARY KEY              | ORDER BY                 |
@@ -372,23 +408,31 @@ VS:::shard
 | `comments` | `(video_id, created_at)` | `(video_id, created_at)` |
 | `reports`  | `(video_id, created_at)` | `(video_id, created_at)` |
 
+### Elasticsearch
+| Индекс               | Поля                                          | Назначение                          |
+| -------------------- | --------------------------------------------- | ----------------------------------- |
+| `video_search_index` | `title`, `description`, `tags`, `author_name` | Полнотекстовый поиск и рекомендации |
+
+
 ## Денормализация
-| Таблица           | Денормализованные поля         | Причина                        |
-| ----------------- | ------------------------------ | ------------------------------ |
-| `video_stats`     | `total_views`, `total_likes`   | Быстрые выборки без агрегации  |
-| `views` / `likes` | `video_id`, `user_id`          | Упрощение JOIN-ов в ClickHouse |
-| `search_index`    | `keywords`, `tags`, `tsvector` | Быстрый полнотекстовый поиск   |
-| `comments`        | `parent_comment_id`            | Простая иерархия без рекурсий  |
+| Таблица                  | Денормализованные поля                         | Причина                                  |
+| ------------------------ | ---------------------------------------------- | ---------------------------------------- |
+| `video_stats`            | `total_views`, `total_likes`                   | Быстрые выборки без агрегации            |
+| `views` / `likes`        | `video_id`, `user_id`                          | Упрощение JOIN-ов в ClickHouse           |
+| `comments`               | `parent_comment_id`                            | Быстрая иерархия комментариев            |
+| `video_storage_metadata` | `bucket`, `object_key`, `resolution`, `format` | Быстрый доступ к файлам без JOIN с MinIO |
+
 
 ## Выбор БД
 
-| Назначение                    | СУБД                                                   | Причина выбора                     |
-| ----------------------------- | ------------------------------------------------------ | ---------------------------------- |
-| Пользователи, метаданные      | **PostgreSQL**                                         | ACID, транзакции                   |
-| Активность (просмотры, лайки) | **ClickHouse**                                         | Аналитика и real-time              |
-| Видео-файлы                   | **MinIO (S3)**                                         | Масштабируемое объектное хранилище |
-| Сессии / кеш                  | **Redis Cluster**                                      | In-memory, TTL                     |
-| Поиск                         | **ElasticSearch** | Быстрый поиск по тексту            |
+| Назначение                    | СУБД              | Причина выбора                     |
+| ----------------------------- | ----------------- | ---------------------------------- |
+| Пользователи, метаданные      | **PostgreSQL**    | ACID, транзакции                   |
+| Активность (просмотры, лайки) | **ClickHouse**    | Аналитика и real-time              |
+| Видео-файлы                   | **MinIO (S3)**    | Масштабируемое объектное хранилище |
+| Сессии / кеш                  | **Redis Cluster** | In-memory, TTL                     |
+| Поиск                         | **Elasticsearch** | Быстрый полнотекстовый поиск       |
+
 
 ## Шардирование
 | Компонент                 | Метод шардинга                     | Репликация / резервирование   |
@@ -397,6 +441,8 @@ VS:::shard
 | ClickHouse                | Distributed table по `video_id`    | ReplicatedMergeTree (2 копии) |
 | Redis                     | Consistent hashing по `session_id` | Cluster mode + Sentinel       |
 | MinIO                     | Erasure coding + replication       | 4–8 нод, 2 parity блока       |
+| Elasticsearch             | Shards по `video_id` + replica     | primary + replica shards      |
+
 
 ## Клиентские библиотеки и интеграции
 | Компонент         | Клиент (Go)                   | Заметки                  |
@@ -405,14 +451,13 @@ VS:::shard
 | ClickHouse        | `clickhouse-go/v2`            | async вставка батчами    |
 | Redis             | `go-redis/v9`                 | для сессий и кеша        |
 | MinIO             | `minio-go/v7`                 | multipart upload         |
-| Search (optional) | `elastic/go-elasticsearch/v8` | если нужен внешний поиск |
+| Elastic           | `elastic/go-elasticsearch/v8` | если нужен внешний поиск |
 
 ## Резервное копирование
 | Компонент           | Метод                | Частота                | Хранение           |
 | ------------------- | -------------------- | ---------------------- | ------------------ |
 | PostgreSQL          | `pg_dump` + WAL      | каждые 6 ч (инкремент) | S3 / MinIO         |
 | ClickHouse          | `BACKUP TABLE` → S3  | 1 раз в сутки          | S3 snapshot        |
-| Redis               | `RDB` + `AOF`        | каждые 30 мин          | локально + replica |
 | MinIO               | Snapshot replication | раз в сутки            | отдельный кластер  |
 | Конфиги (YAML, env) | Git + S3 backup      | при деплое             | Git / S3           |
 
