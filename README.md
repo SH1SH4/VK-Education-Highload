@@ -440,7 +440,7 @@ VS:::shard
 | ------------------------- | ---------------------------------- | ----------------------------- |
 | PostgreSQL (Auth / Video) | Hash по `user_id` или `video_id`   | Master + 2 replicas (async)   |
 | ClickHouse                | Distributed table по `video_id`    | ReplicatedMergeTree (2 копии) |
-| Redis                     | Consistent hashing по `session_id` | Cluster mode + Sentinel       |
+| Redis                     | А он тут нужен?                    | Cluster mode + Sentinel       |
 | MinIO                     | Erasure coding + replication       | 4–8 нод, 2 parity блока       |
 | Elasticsearch             | Shards по `video_id` + replica     | primary + replica shards      |
 
