@@ -178,6 +178,7 @@ LB_final_L7 = 8 + 1 = **9 нод**
 ---
 
 # 5. Логическая схема БД
+
 ``` mermaid
 erDiagram
     users {
@@ -309,7 +310,7 @@ erDiagram
 
 ```
 
-# 6 пункт какой он там
+# 6 Физическая схема БД
 ```mermaid
 graph LR
 
@@ -461,6 +462,272 @@ VS:::shard
 | MinIO               | Snapshot replication | раз в сутки            | отдельный кластер  |
 | Конфиги (YAML, env) | Git + S3 backup      | при деплое             | Git / S3           |
 
+
+# 7. Алгоритмы
+
+## 7.1. Алгоритм адаптивного стриминга (HLS/DASH)
+
+**Область применения:** Просмотр видео
+
+**Назначение:** Обеспечение плавного просмотра при различном качестве интернет-соединения пользователя.
+
+**Принцип работы:**
+
+### Подготовка контента:
+- Видео заранее кодируется в несколько качеств (1080p, 720p, 480p, 360p)
+- Каждая версия нарезается на короткие чанки продолжительностью 2-10 секунд
+- Формируется манифест-файл с информацией о всех доступных чанках и их качестве
+
+### Инициализация просмотра:
+- Плеер загружает манифест и начинает воспроизведение со среднего качества
+- Одновременно оценивается скорость сети и стабильность соединения
+
+### Динамическая адаптация:
+- Алгоритм постоянно мониторит:
+  - Скорость загрузки чанков
+  - Уровень заполнения буфера воспроизведения
+  - Частоту потерь пакетов
+- На основе этих метрик выбирает оптимальное качество для следующего чанка
+- При ухудшении связи - переключается на более низкое качество
+- При улучшении - постепенно повышает качество
+
+---
+
+## 7.2. Алгоритм автоматического анализа видеоконтента
+
+**Область применения:** Обработка загруженных видео, улучшение поиска и рекомендаций
+
+**Назначение:** Автоматическое извлечение семантической информации из видео для улучшения метаданных.
+
+**Принцип работы:**
+
+### Анализ визуального контента:
+- **Детекция объектов и сцен:** автоматическое распознавание людей, животных, транспорта, архитектуры, природы
+- **Классификация контента:** определение жанра видео (интервью, влог, обзор, туториал, развлечения)
+- **Анализ цветовой палитры:** определение визуального стиля и атмосферы видео
+- **Распознавание текста:** извлечение текстовых надписей из кадров для дополнительных ключевых слов
+
+### Анализ аудиодорожки:
+- **Транскрибация речи:** автоматическое преобразование речи в текст для создания субтитров
+- **Определение языка:** автоматическое определение языка контента
+- **Анализ звуковой атмосферы:** распознавание музыки, шумов, типов аудиоконтента
+- **Выделение ключевых фраз:** автоматическое извлечение основных тем из распознанной речи
+
+### Обогащение метаданных:
+- **Автогенерация тегов:** создание релевантных тегов на основе анализа контента
+- **Определение категории:** автоматическая классификация видео по тематическим категориям
+- **Извлечение ключевых кадров:** выбор наиболее репрезентативных изображений для превью
+- **Оценка содержания:** определение возрастного рейтинга и типа контента
+
+---
+
+## 7.3. Алгоритм персонализированных рекомендаций
+
+**Область применения:** Главная страница, рекомендации, "Следующее видео"
+
+**Назначение:** Максимизация времени на платформе через показ релевантного контента на основе интересов пользователя.
+
+**Принцип работы:**
+
+### Многоуровневая архитектура рекомендаций:
+
+**Первый уровень - отбор кандидатов:**
+- **Content-based filtering:** "похожее по семантике" на основе анализа видеоконтента
+- **Collaborative filtering:** "похожие пользователи смотрели" с учетом временных паттернов
+- **Knowledge-based:** рекомендации по явным предпочтениям (подписки, избранное)
+- **Context-aware:** учет времени суток, устройства, локации, дня недели
+- **Trend-based:** популярный контент в регионе и социальные тренды
+- **Freshness-based:** новые видео от подписанных авторов и актуальный контент
+
+**Второй уровень - интеллектуальное ранжирование:**
+- **Deep learning ranking:** нейросетевая модель, учитывающая 100+ признаков
+- **Multi-objective optimization:** баланс между релевантностью, разнообразием и новизной
+- **Session-aware ranking:** учет текущей сессии просмотра и контекста
+- **Exploration vs exploitation:** баланс между проверенным и новым контентом
+- **Business rules:** приоритизация партнерского контента и монетизируемых видео
+
+### Метрики качества:
+- **Short-term engagement:** CTR, время просмотра, завершение видео
+- **Long-term retention:** возвращаемость пользователя, частота визитов
+- **Content diversity:** разнообразие рекомендуемого контента
+- **Serendipity:** коэффициент "приятных неожиданностей" в рекомендациях
+
+---
+
+## 7.4. Алгоритм полнотекстового поиска
+
+**Область применения:** Поиск по видеоплатформе
+
+**Назначение:** Обеспечение точного и быстрого поиска видео по всем метаданным, включая автоматически извлеченные.
+
+**Принцип работы:**
+
+### Индексация данных:
+**Структура поискового индекса включает:**
+- **Базовые метаданные:** названия, описания, теги автора
+- **Автоматически извлеченные данные:** транскрипция речи, распознанный текст из кадров
+- **Визуальные дескрипторы:** объекты, сцены, активности, выявленные алгоритмом анализа
+- **Контекстуальные признаки:** продолжительность, качество, язык, возрастной рейтинг
+- **Социальные сигналы:** лайки, комментарии, просмотры, репосты
+
+### Ранжирование результатов:
+
+**Многофакторная модель релевантности:**
+- **Текстовая релевантность:** BM25 + семантическое сходство через эмбеддинги
+- **Визуальное соответствие:** совпадение по выявленным объектам и сценам
+- **Популярностные метрики:** просмотры, вовлеченность, социальные сигналы
+- **Свежесть контента:** приоритет новым и актуальным видео
+- **Персонализация:** учет истории поисков и просмотров пользователя
+- **Качество контента:** оценка технического и содержательного качества
+
+### Возможности поиска:
+
+**Гибридный поиск:**
+- **Semantic search:** поиск по смыслу, а не точным словам
+- **Visual search:** поиск по визуальным характеристикам ("видео с закатами")
+- **Faceted search:** фильтрация по продолжительности, качеству, дате, языку
+- **Voice search:** оптимизация для голосовых запросов
+
+**Поисковые подсказки:**
+- Автодополнение на основе популярных запросов и истории пользователя
+- Исправление опечаток и орфографических ошибок
+- Синонимизация и расширение запросов
+
+---
+
+## 7.5. Алгоритм сегментации и кодирования видео
+
+**Область применения:** Обработка загружаемых видео
+
+**Назначение:** Подготовка видеофайлов к эффективному хранению и адаптивному стримингу.
+
+**Принцип работы:**
+
+### Прием загрузки:
+- Пользователь загружает видеофайл
+- Файл проверяется на безопасность и валидность
+- Видео помещается в очередь обработки
+
+### Параллельная обработка:
+- **Кодирование в multiple bitrate:** создание версий разного качества
+- **Контент-анализ:** запуск алгоритма автоматического анализа видеоконтента
+- Обе процессы выполняются параллельно для ускорения обработки
+
+### Сегментация на чанки:
+- Каждая версия качества нарезается на сегменты по 2-10 секунд
+- Формируются плейлисты и манифесты для адаптивного стриминга
+
+### Синхронизация метаданных:
+- Результаты контент-анализа сохраняются в базу данных
+- Обновляются поисковые индексы
+- Видео становится доступным для поиска и рекомендаций
+# 8 Технологии
+
+| Технология | Область применения | Обоснование выбора |
+|------------|-------------------|-------------------|
+| **Go (Golang)** | Бэкенд-сервисы, API | Высокая производительность, простота разработки микросервисов, эффективное потребление ресурсов |
+| **Nginx** | Балансировщик нагрузки (L7), раздача статики | Высокая производительность, гибкая конфигурация, проверенная надежность |
+| **Docker, Kubernetes** | Контейнеризация, оркестрация | Изоляция сервисов, масштабируемость, упрощение деплоя |
+| **Apache Kafka** | Очереди событий, стриминг данных | Высокая пропускная способность, отказоустойчивость, гарантированная доставка сообщений |
+| **Grafana + Prometheus** | Мониторинг и визуализация | Мониторинг метрик в реальном времени, гибкие дашборды, оповещения |
+| **HAProxy** | Балансировщик нагрузки (L4) | Эффективная балансировка TCP-трафика, стабильность, мониторинг |
+| **FFmpeg** | Обработка видео | Промышленный стандарт для кодирования/декодирования видео, поддержка всех форматов |
+| **hls.js** | Клиентский плеер (браузер) | Библиотеки для адаптивного стриминга в браузере, поддержка HLS/DASH |
+| **Jaeger** | Распределенный трейсинг | Отслеживание запросов в микросервисной архитектуре, диагностика проблем |  
+| **ArgoCD** | GitOps деплой | Автоматизация деплоя приложений, синхронизация с git-репозиторием |
+
+# 10 Схема проекта
+```mermaid
+flowchart TB
+    EXT_USER["Пользователь"] --> ANYCAST["Anycast IP<br>Ближайший ДЦ"]
+    ANYCAST --> L4_EXT["L4 Балансировщик<br>HAProxy"]
+    L4_EXT --> CDN["CDN<br>Статика, чанки видео"] & L7_AUTH["L7: auth.rutube.ru"] & L7_API["L7: api.rutube.ru"] & VIDEO_SERVICE["Video Service<br>Go"] & L7_UPLOAD["L7: upload.rutube.ru"] & L7_REC["L7: rec.rutube.ru"] & L7_SEARCH["L7: search.rutube.ru"]
+    L7_AUTH --> AUTH_SERVICE["Auth Service<br>Go"]
+    AUTH_SERVICE --> REDIS_SESSIONS[("Redis<br>сессии, кеш")] & PG_AUTH[("PostgreSQL<br>users, subscriptions,<br>moderators, permissions")] & PROMETHEUS["Prometheus<br>Сбор метрик"]
+    L7_API --> API_SERVICE["API Service<br>Go"]
+    API_SERVICE --> PG_VIDEO[("PostgreSQL<br>videos, video_stats,<br>comments, playlists")] & ELASTICSEARCH[("Elasticsearch<br>поисковый индекс")] & REDIS_SESSIONS & KAFKA[["Kafka<br>поток событий"]] & API_COMPOSITION["API Composition Service"] & PROMETHEUS & AUTH_SERVICE
+    VIDEO_SERVICE --> MINIO[("MinIO/S3<br>видео файлы")] & KAFKA & PROMETHEUS & AUTH_SERVICE
+    L7_UPLOAD --> UPLOAD_SERVICE["Upload Service<br>Go"]
+    UPLOAD_SERVICE --> MINIO & KAFKA & PROMETHEUS & AUTH_SERVICE
+    L7_REC --> REC_SERVICE["Recommendation Service<br>Python/Go"]
+    REC_SERVICE --> REC_ENGINE_SINGLE["Single Rec Engine"] & REC_ENGINE_RANKER["Simple Ranker App"] & REDIS_REC[("Redis<br>кеш рекомендаций")] & PROMETHEUS & AUTH_SERVICE
+    L7_SEARCH --> SEARCH_SERVICE["Search Service<br>Go"]
+    SEARCH_SERVICE --> SEARCH_APP["Simple Search App"] & SEARCH_RANKER["Simple Ranker App"] & REQUEST_FILLER["Search Request Filler App"] & PROMETHEUS & AUTH_SERVICE
+    SEARCH_APP --> ELASTICSEARCH
+    SEARCH_RANKER --> REDIS_MODELS[("Redis<br>модели ранжирования")]
+    REQUEST_FILLER --> REDIS_SEARCHES[("Redis<br>история поисков")]
+    KAFKA --> ITEM_FEATURES_WORKER["Item Features Worker<br>Python"] & USER_ACTIVITY_WORKER["User Activity Worker<br>Python"] & RECENT_SEARCH_WORKER["Recent Search Worker<br>Python"] & TRAFFIC_MARKER_WORKER["Traffic Marker Worker"] & EVENTS_SERVICE["Events Service"]
+    ITEM_FEATURES_WORKER --> CLICKHOUSE_FEATURES[("ClickHouse<br>фичи видео")] & PG_ITEMS[("PostgreSQL<br>items, categories,<br>tags, metadata")]
+    CLICKHOUSE_FEATURES --> SEARCH_INDEX_WORKER["Search Index Worker"] & TRAIN_RANKER_WORKER["Train Ranker Worker<br>Python"]
+    SEARCH_INDEX_WORKER --> ELASTICSEARCH
+    USER_ACTIVITY_WORKER --> CLICKHOUSE_HISTORY[("ClickHouse<br>история действий")]
+    RECENT_SEARCH_WORKER --> REDIS_SEARCHES
+    TRAFFIC_MARKER_WORKER --> REDIS_MODELS
+    CLICKHOUSE_HISTORY --> TRAIN_RANKER_WORKER
+    TRAIN_RANKER_WORKER --> REDIS_MODELS
+    EVENTS_SERVICE --> CLICKHOUSE_DWH[("ClickHouse DWH<br>аналитика, метрики")]
+    API_COMPOSITION --> REC_SERVICE & SEARCH_SERVICE & PG_VIDEO
+    PG_ITEMS --> ITEM_SERVER["Item Server"]
+    ITEM_SERVER --> SAMPLE_RANKER_APP["Sample Ranker App"]
+    PROMETHEUS --> GRAFANA["Grafana<br>Дашборды"]
+
+     EXT_USER:::external
+     ANYCAST:::external
+     L4_EXT:::loadbalancer
+     CDN:::external
+     L7_AUTH:::loadbalancer
+     L7_API:::loadbalancer
+     VIDEO_SERVICE:::service
+     L7_UPLOAD:::loadbalancer
+     L7_REC:::loadbalancer
+     L7_SEARCH:::loadbalancer
+     AUTH_SERVICE:::service
+     REDIS_SESSIONS:::storage
+     PG_AUTH:::storage
+     PROMETHEUS:::monitoring
+     API_SERVICE:::service
+     PG_VIDEO:::storage
+     ELASTICSEARCH:::storage
+     KAFKA:::queue
+     API_COMPOSITION:::service
+     MINIO:::storage
+     UPLOAD_SERVICE:::service
+     REC_SERVICE:::recommendation
+     REC_ENGINE_SINGLE:::recommendation
+     REC_ENGINE_RANKER:::recommendation
+     REDIS_REC:::storage
+     SEARCH_SERVICE:::service
+     SEARCH_APP:::search
+     SEARCH_RANKER:::search
+     REQUEST_FILLER:::search
+     REDIS_MODELS:::storage
+     REDIS_SEARCHES:::storage
+     ITEM_FEATURES_WORKER:::ml
+     USER_ACTIVITY_WORKER:::ml
+     RECENT_SEARCH_WORKER:::ml
+     TRAFFIC_MARKER_WORKER:::ml
+     CLICKHOUSE_FEATURES:::storage
+     PG_ITEMS:::storage
+     SEARCH_INDEX_WORKER:::ml
+     TRAIN_RANKER_WORKER:::ml
+     CLICKHOUSE_HISTORY:::storage
+     CLICKHOUSE_DWH:::storage
+     ITEM_SERVER:::service
+     SAMPLE_RANKER_APP:::search
+     GRAFANA:::monitoring
+    classDef external fill:#e1f5fe
+    classDef loadbalancer fill:#f3e5f5
+    classDef service fill:#e8f5e8
+    classDef storage fill:#fff3e0
+    classDef queue fill:#fce4ec
+    classDef monitoring fill:#e8f5e8
+    classDef ml fill:#e1f5fe
+    classDef recommendation fill:#f3e5f5
+    classDef search fill:#fff0f0
+
+
+
+```
 
 [1]: https://tass.ru/ekonomika/24311321 "Источник"
 [2]: https://inclient.ru/rutube-stats/#rutube3 "Не уверен верить ли источнику"
