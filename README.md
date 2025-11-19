@@ -638,92 +638,112 @@ VS:::shard
 
 # 10 Схема проекта
 ```mermaid
+---
+config:
+  layout: dagre
+---
 flowchart TB
     EXT_USER["Пользователь"] --> ANYCAST["Anycast IP<br>Ближайший ДЦ"]
     ANYCAST --> L4_EXT["L4 Балансировщик<br>HAProxy"]
-    L4_EXT --> CDN["CDN<br>Статика, чанки видео"] & L7_AUTH["L7: auth.rutube.ru"] & L7_API["L7: api.rutube.ru"] & VIDEO_SERVICE["Video Service<br>Go"] & L7_UPLOAD["L7: upload.rutube.ru"] & L7_REC["L7: rec.rutube.ru"] & L7_SEARCH["L7: search.rutube.ru"]
+    L4_EXT --> CDN["CDN<br>Статика, чанки видео"] & L7_AUTH["L7: auth.rutube.ru"] & L7_API["L7: api.rutube.ru"] & L7_REC["L7: rec.rutube.ru"] & L7_SEARCH["L7: search.rutube.ru"] & n1["L7: video.rutube.ru"] & UPLOAD_SERVICE["Upload Service<br>Go"]
     L7_AUTH --> AUTH_SERVICE["Auth Service<br>Go"]
-    AUTH_SERVICE --> REDIS_SESSIONS[("Redis<br>сессии, кеш")] & PG_AUTH[("PostgreSQL<br>users, subscriptions,<br>moderators, permissions")] & PROMETHEUS["Prometheus<br>Сбор метрик"]
+    AUTH_SERVICE --> REDIS[("Redis<br>sessions")] & KAFKA_AUTH[["Kafka Auth"]]
     L7_API --> API_SERVICE["API Service<br>Go"]
-    API_SERVICE --> PG_VIDEO[("PostgreSQL<br>videos, video_stats,<br>comments, playlists")] & ELASTICSEARCH[("Elasticsearch<br>поисковый индекс")] & REDIS_SESSIONS & KAFKA[["Kafka<br>поток событий"]] & API_COMPOSITION["API Composition Service"] & PROMETHEUS & AUTH_SERVICE
-    VIDEO_SERVICE --> MINIO[("MinIO/S3<br>видео файлы")] & KAFKA & PROMETHEUS & AUTH_SERVICE
-    L7_UPLOAD --> UPLOAD_SERVICE["Upload Service<br>Go"]
-    UPLOAD_SERVICE --> MINIO & KAFKA & PROMETHEUS & AUTH_SERVICE
-    L7_REC --> REC_SERVICE["Recommendation Service<br>Python/Go"]
-    REC_SERVICE --> REC_ENGINE_SINGLE["Single Rec Engine"] & REC_ENGINE_RANKER["Simple Ranker App"] & REDIS_REC[("Redis<br>кеш рекомендаций")] & PROMETHEUS & AUTH_SERVICE
-    L7_SEARCH --> SEARCH_SERVICE["Search Service<br>Go"]
-    SEARCH_SERVICE --> SEARCH_APP["Simple Search App"] & SEARCH_RANKER["Simple Ranker App"] & REQUEST_FILLER["Search Request Filler App"] & PROMETHEUS & AUTH_SERVICE
-    SEARCH_APP --> ELASTICSEARCH
-    SEARCH_RANKER --> REDIS_MODELS[("Redis<br>модели ранжирования")]
-    REQUEST_FILLER --> REDIS_SEARCHES[("Redis<br>история поисков")]
-    KAFKA --> ITEM_FEATURES_WORKER["Item Features Worker<br>Python"] & USER_ACTIVITY_WORKER["User Activity Worker<br>Python"] & RECENT_SEARCH_WORKER["Recent Search Worker<br>Python"] & TRAFFIC_MARKER_WORKER["Traffic Marker Worker"] & EVENTS_SERVICE["Events Service"]
-    ITEM_FEATURES_WORKER --> CLICKHOUSE_FEATURES[("ClickHouse<br>фичи видео")] & PG_ITEMS[("PostgreSQL<br>items, categories,<br>tags, metadata")]
-    CLICKHOUSE_FEATURES --> SEARCH_INDEX_WORKER["Search Index Worker"] & TRAIN_RANKER_WORKER["Train Ranker Worker<br>Python"]
-    SEARCH_INDEX_WORKER --> ELASTICSEARCH
-    USER_ACTIVITY_WORKER --> CLICKHOUSE_HISTORY[("ClickHouse<br>история действий")]
-    RECENT_SEARCH_WORKER --> REDIS_SEARCHES
-    TRAFFIC_MARKER_WORKER --> REDIS_MODELS
-    CLICKHOUSE_HISTORY --> TRAIN_RANKER_WORKER
-    TRAIN_RANKER_WORKER --> REDIS_MODELS
-    EVENTS_SERVICE --> CLICKHOUSE_DWH[("ClickHouse DWH<br>аналитика, метрики")]
-    API_COMPOSITION --> REC_SERVICE & SEARCH_SERVICE & PG_VIDEO
-    PG_ITEMS --> ITEM_SERVER["Item Server"]
-    ITEM_SERVER --> SAMPLE_RANKER_APP["Sample Ranker App"]
-    PROMETHEUS --> GRAFANA["Grafana<br>Дашборды"]
-
+    API_SERVICE --> REC_SERVICE["Recommendation Service<br>Python/Go"] & SEARCH_SERVICE["Search Service<br>Go"] & KAFKA_API[["Kafka API"]]
+    VIDEO_SERVICE["Video Service<br>Go"] --> MINIO[("MinIO<br>video_files")] & KAFKA_VIDEO[["Kafka Video"]]
+    UPLOAD_SERVICE --> MINIO & KAFKA_UPLOAD[["Kafka Upload"]]
+    L7_REC --> REC_SERVICE
+    REC_SERVICE --> REC_ENGINE_SINGLE["Single Rec Engine"]
+    L7_SEARCH --> SEARCH_SERVICE
+    SEARCH_SERVICE --> KAFKA_SEARCH[["Kafka Search"]] & REQUEST_FILLER["Search Request Filler App"]
+    KAFKA_AUTH --> PG_AUTH[("PostgreSQL<br>users")]
+    KAFKA_API --> ITEM_FEATURES_DB[("PostgreSQL<br>item_features")]
+    KAFKA_VIDEO --> PG_VIDEO[("PostgreSQL<br>videos")]
+    KAFKA_UPLOAD --> PG_VIDEO
+    KAFKA_SEARCH --> SEARCH_INDEX_DB[("PostgreSQL<br>search_index")]
+    SEARCH_APP["Simple Search App"] --> SEARCH_RANKER["Simple Ranker App"] & SEARCH_INDEX_DB & ES[("Elasticsearch<br>search_index")]
+    SEARCH_RANKER --> RANKING_MODELS_DB[("PostgreSQL<br>ranking_models")] & SEARCH_SERVICE & USERS_HISTORY_DB[("PostgreSQL<br>users_history")]
+    REQUEST_FILLER --> RECENT_SEARCHES_DB[("Redis<br>recent_searches")] & SEARCH_APP
+    KAFKA[["Kafka<br>События"]] --> ITEM_FEATURES_WORKER["Item Features Worker<br>Python"] & USER_ACTIVITY_WORKER["User Activity Worker<br>Python"] & RECENT_SEARCH_WORKER["Recent Search Worker<br>Python"] & TRAFFIC_MARKER_WORKER["Traffic Marker Worker"] & EVENTS_SERVICE["Events Service"] & PG_VIDEO
+    ITEM_FEATURES_WORKER --> ITEM_FEATURES_DB
+    ITEM_FEATURES_DB --> SEARCH_INDEX_WORKER["Search Index Worker"] & TRAIN_RANKER_WORKER["Train Ranker Worker<br>Python"]
+    SEARCH_INDEX_WORKER --> SEARCH_INDEX_DB & ES
+    USER_ACTIVITY_WORKER --> USERS_HISTORY_DB
+    RECENT_SEARCH_WORKER --> RECENT_SEARCHES_DB
+    TRAFFIC_MARKER_WORKER --> RANKING_MODELS_DB
+    USERS_HISTORY_DB --> TRAIN_RANKER_WORKER
+    TRAIN_RANKER_WORKER --> RANKING_MODELS_DB
+    EVENTS_SERVICE --> DWH_DB[("ClickHouse<br>analytics")]
+    ITEM_SERVER["Item Server"] --> SAMPLE_RANKER_APP["Sample Ranker App"]
+    PROMETHEUS["Prometheus<br>Сбор метрик"] --> GRAFANA["Grafana<br>Дашборды"]
+    n1 --> VIDEO_SERVICE
+    n2["Api Upload Video<br>Services"] --> KAFKA & PROMETHEUS
+    REC_ENGINE_RANKER["Simple Ranker App"] --> REC_SERVICE
+    REC_ENGINE_SINGLE --> REC_ENGINE_RANKER & REDIS_REC[("Redis<br>rec_cache")] & ITEM_FEATURES_DB
+    REDIS_REC --> REC_ENGINE_RANKER
+    REC_ENGINE_SINGLE --> USERS_HISTORY_DB
+    n1@{ shape: rect}
+    n2@{ shape: diam}
      EXT_USER:::external
      ANYCAST:::external
      L4_EXT:::loadbalancer
      CDN:::external
      L7_AUTH:::loadbalancer
      L7_API:::loadbalancer
-     VIDEO_SERVICE:::service
-     L7_UPLOAD:::loadbalancer
      L7_REC:::loadbalancer
      L7_SEARCH:::loadbalancer
-     AUTH_SERVICE:::service
-     REDIS_SESSIONS:::storage
-     PG_AUTH:::storage
-     PROMETHEUS:::monitoring
-     API_SERVICE:::service
-     PG_VIDEO:::storage
-     ELASTICSEARCH:::storage
-     KAFKA:::queue
-     API_COMPOSITION:::service
-     MINIO:::storage
+     n1:::loadbalancer
      UPLOAD_SERVICE:::service
+     AUTH_SERVICE:::service
+     REDIS:::storage
+     KAFKA_AUTH:::queue
+     API_SERVICE:::service
      REC_SERVICE:::recommendation
-     REC_ENGINE_SINGLE:::recommendation
-     REC_ENGINE_RANKER:::recommendation
-     REDIS_REC:::storage
      SEARCH_SERVICE:::service
+     KAFKA_API:::queue
+     VIDEO_SERVICE:::service
+     MINIO:::storage
+     KAFKA_VIDEO:::queue
+     KAFKA_UPLOAD:::queue
+     REC_ENGINE_SINGLE:::recommendation
+     KAFKA_SEARCH:::queue
+     REQUEST_FILLER:::search
+     PG_AUTH:::storage
+     ITEM_FEATURES_DB:::search
+     PG_VIDEO:::storage
+     SEARCH_INDEX_DB:::search
      SEARCH_APP:::search
      SEARCH_RANKER:::search
-     REQUEST_FILLER:::search
-     REDIS_MODELS:::storage
-     REDIS_SEARCHES:::storage
+     ES:::storage
+     RANKING_MODELS_DB:::search
+     USERS_HISTORY_DB:::search
+     RECENT_SEARCHES_DB:::search
+     KAFKA:::queue
      ITEM_FEATURES_WORKER:::ml
      USER_ACTIVITY_WORKER:::ml
      RECENT_SEARCH_WORKER:::ml
      TRAFFIC_MARKER_WORKER:::ml
-     CLICKHOUSE_FEATURES:::storage
-     PG_ITEMS:::storage
      SEARCH_INDEX_WORKER:::ml
      TRAIN_RANKER_WORKER:::ml
-     CLICKHOUSE_HISTORY:::storage
-     CLICKHOUSE_DWH:::storage
+     DWH_DB:::search
      ITEM_SERVER:::service
      SAMPLE_RANKER_APP:::search
+     PROMETHEUS:::monitoring
      GRAFANA:::monitoring
+     n2:::service
+     REC_ENGINE_RANKER:::recommendation
+     REDIS_REC:::storage
     classDef external fill:#e1f5fe
     classDef loadbalancer fill:#f3e5f5
-    classDef service fill:#e8f5e8
     classDef storage fill:#fff3e0
     classDef queue fill:#fce4ec
     classDef monitoring fill:#e8f5e8
     classDef ml fill:#e1f5fe
     classDef recommendation fill:#f3e5f5
     classDef search fill:#fff0f0
+    classDef service fill:#e8f5e8
+    style n2 stroke:#000000,fill:#C8E6C9
+
 ```
 
 [1]: https://tass.ru/ekonomika/24311321 "Источник"
