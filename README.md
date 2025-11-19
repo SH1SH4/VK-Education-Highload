@@ -724,9 +724,6 @@ flowchart TB
     classDef ml fill:#e1f5fe
     classDef recommendation fill:#f3e5f5
     classDef search fill:#fff0f0
-
-
-
 ```
 
 [1]: https://tass.ru/ekonomika/24311321 "Источник"
