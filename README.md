@@ -491,110 +491,69 @@ VS:::shard
 - При ухудшении связи - переключается на более низкое качество
 - При улучшении - постепенно повышает качество
 
----
 
 ## 7.2. Алгоритм автоматического анализа видеоконтента
 
-**Область применения:** Обработка загруженных видео, улучшение поиска и рекомендаций
+**Пайплайн обработки:**
+1. **Поступление видео** → Upload Service кладет видео в MinIO и отправляет событие в Kafka Upload
+2. **Очередь обработки** → Video Service получает событие, создает задачу в Kafka Video
+3. **Воркеры анализа** → 
+   - Компьютерное зрение: YOLOv8 (объекты), CLIP (сцены), OCR (текст)
+   - Аудиоанализ: Whisper (транскрипция), YAMNet (звуки)
+   - Текст: BERT (теги), CatBoost (категории)
+4. **Обогащение метаданных** → результаты пишутся в PostgreSQL videos через Kafka
+5. **Индексация для поиска** → Search Index Worker обновляет Elasticsearch
 
-**Назначение:** Автоматическое извлечение семантической информации из видео для улучшения метаданных.
-
-**Принцип работы:**
-
-### Анализ визуального контента:
-- **Детекция объектов и сцен:** автоматическое распознавание людей, животных, транспорта, архитектуры, природы
-- **Классификация контента:** определение жанра видео (интервью, влог, обзор, туториал, развлечения)
-- **Анализ цветовой палитры:** определение визуального стиля и атмосферы видео
-- **Распознавание текста:** извлечение текстовых надписей из кадров для дополнительных ключевых слов
-
-### Анализ аудиодорожки:
-- **Транскрибация речи:** автоматическое преобразование речи в текст для создания субтитров
-- **Определение языка:** автоматическое определение языка контента
-- **Анализ звуковой атмосферы:** распознавание музыки, шумов, типов аудиоконтента
-- **Выделение ключевых фраз:** автоматическое извлечение основных тем из распознанной речи
-
-### Обогащение метаданных:
-- **Автогенерация тегов:** создание релевантных тегов на основе анализа контента
-- **Определение категории:** автоматическая классификация видео по тематическим категориям
-- **Извлечение ключевых кадров:** выбор наиболее репрезентативных изображений для превью
-- **Оценка содержания:** определение возрастного рейтинга и типа контента
+**Результат:** автоматические теги, категории, транскрипты для поиска и рекомендаций
 
 ---
 
 ## 7.3. Алгоритм персонализированных рекомендаций
 
-**Область применения:** Главная страница, рекомендации, "Следующее видео"
+**Двухуровневая архитектура:**
 
-**Назначение:** Максимизация времени на платформе через показ релевантного контента на основе интересов пользователя.
+**Level 1 - Кандидаты:**
+- API Service → Recommendation Service → Single Rec Engine
+- Источники кандидатов:
+  - Content-based: похожие видео (Item Features DB)
+  - Collaborative: похожие пользователи (Users History DB) 
+  - Trending: популярное (Redis rec_cache)
+  - Fresh: новое (PostgreSQL videos)
 
-**Принцип работы:**
+**Level 2 - Ранжирование:**
+- Single Rec Engine → Simple Ranker App
+- Модели: Two-Tower (семантика), DeepFM (признаки), ALS (коллаборация)
+- Контекст: история пользователя, время, устройство
 
-### Многоуровневая архитектура рекомендаций:
-
-**Первый уровень - отбор кандидатов:**
-- **Content-based filtering:** "похожее по семантике" на основе анализа видеоконтента
-- **Collaborative filtering:** "похожие пользователи смотрели" с учетом временных паттернов
-- **Knowledge-based:** рекомендации по явным предпочтениям (подписки, избранное)
-- **Context-aware:** учет времени суток, устройства, локации, дня недели
-- **Trend-based:** популярный контент в регионе и социальные тренды
-- **Freshness-based:** новые видео от подписанных авторов и актуальный контент
-
-**Второй уровень - интеллектуальное ранжирование:**
-- **Deep learning ranking:** нейросетевая модель, учитывающая 100+ признаков
-- **Multi-objective optimization:** баланс между релевантностью, разнообразием и новизной
-- **Session-aware ranking:** учет текущей сессии просмотра и контекста
-- **Exploration vs exploitation:** баланс между проверенным и новым контентом
-- **Business rules:** приоритизация партнерского контента и монетизируемых видео
-
-### Метрики качества:
-- **Short-term engagement:** CTR, время просмотра, завершение видео
-- **Long-term retention:** возвращаемость пользователя, частота визитов
-- **Content diversity:** разнообразие рекомендуемого контента
-- **Serendipity:** коэффициент "приятных неожиданностей" в рекомендациях
+**Обучение моделей:**
+- User Activity Worker → Users History DB
+- Train Ranker Worker обучает модели → Ranking Models DB
 
 ---
 
 ## 7.4. Алгоритм полнотекстового поиска
 
-**Область применения:** Поиск по видеоплатформе
+**Поисковый пайплайн:**
 
-**Назначение:** Обеспечение точного и быстрого поиска видео по всем метаданным, включая автоматически извлеченные.
+**Индексация:**
+1. Video Service/Upload Service → Kafka → Search Index Worker
+2. Данные для индекса:
+   - Базовые метаданные (название, описание)
+   - Автоматические теги (из анализа контента)
+   - Транскрипты речи (Whisper)
+   - Визуальные признаки (CLIP)
+3. Индекс: Elasticsearch + PostgreSQL search_index
 
-**Принцип работы:**
+**Поисковый запрос:**
+1. Пользователь → L7 search → Search Service
+2. Request Filler обогащает запрос (история из Redis)
+3. Search App ищет кандидатов (Elasticsearch + PostgreSQL)
+4. Simple Ranker ранжирует (модели из Ranking Models DB)
 
-### Индексация данных:
-**Структура поискового индекса включает:**
-- **Базовые метаданные:** названия, описания, теги автора
-- **Автоматически извлеченные данные:** транскрипция речи, распознанный текст из кадров
-- **Визуальные дескрипторы:** объекты, сцены, активности, выявленные алгоритмом анализа
-- **Контекстуальные признаки:** продолжительность, качество, язык, возрастной рейтинг
-- **Социальные сигналы:** лайки, комментарии, просмотры, репосты
-
-### Ранжирование результатов:
-
-**Многофакторная модель релевантности:**
-- **Текстовая релевантность:** BM25 + семантическое сходство через эмбеддинги
-- **Визуальное соответствие:** совпадение по выявленным объектам и сценам
-- **Популярностные метрики:** просмотры, вовлеченность, социальные сигналы
-- **Свежесть контента:** приоритет новым и актуальным видео
-- **Персонализация:** учет истории поисков и просмотров пользователя
-- **Качество контента:** оценка технического и содержательного качества
-
-### Возможности поиска:
-
-**Гибридный поиск:**
-- **Semantic search:** поиск по смыслу, а не точным словам
-- **Visual search:** поиск по визуальным характеристикам ("видео с закатами")
-- **Faceted search:** фильтрация по продолжительности, качеству, дате, языку
-- **Voice search:** оптимизация для голосовых запросов
-
-**Поисковые подсказки:**
-- Автодополнение на основе популярных запросов и истории пользователя
-- Исправление опечаток и орфографических ошибок
-- Синонимизация и расширение запросов
-
----
-
+**Модели поиска:**
+- Текст: BM25 + Sentence-BERT
+- Визуал: CLIP эмбеддинги
+- Ранжирование: LambdaMART
 ## 7.5. Алгоритм сегментации и кодирования видео
 
 **Область применения:** Обработка загружаемых видео
@@ -648,40 +607,39 @@ flowchart TB
     L4_EXT --> CDN["CDN<br>Статика, чанки видео"] & L7_AUTH["L7: auth.rutube.ru"] & L7_API["L7: api.rutube.ru"] & L7_REC["L7: rec.rutube.ru"] & L7_SEARCH["L7: search.rutube.ru"] & n1["L7: video.rutube.ru"] & UPLOAD_SERVICE["Upload Service<br>Go"]
     L7_AUTH --> AUTH_SERVICE["Auth Service<br>Go"]
     AUTH_SERVICE --> REDIS[("Redis<br>sessions")] & KAFKA_AUTH[["Kafka Auth"]]
-    L7_API --> API_SERVICE["API Service<br>Go"]
-    API_SERVICE --> REC_SERVICE["Recommendation Service<br>Python/Go"] & SEARCH_SERVICE["Search Service<br>Go"] & KAFKA_API[["Kafka API"]]
-    VIDEO_SERVICE["Video Service<br>Go"] --> MINIO[("MinIO<br>video_files")] & KAFKA_VIDEO[["Kafka Video"]]
-    UPLOAD_SERVICE --> MINIO & KAFKA_UPLOAD[["Kafka Upload"]]
-    L7_REC --> REC_SERVICE
-    REC_SERVICE --> REC_ENGINE_SINGLE["Single Rec Engine"]
+    L7_API -- Взаиомдействие с лайками, просмотрами и комментариями --> API_SERVICE["API Service<br>Go"]
+    API_SERVICE --> SEARCH_SERVICE["Search Service<br>Go"]
+    API_SERVICE -- Api Кладёт все действия в кафку --> KAFKA_API[["Kafka API"]]
+    VIDEO_SERVICE["Video Service<br>Go"] --> MINIO[("MinIO<br>video_files")]
+    UPLOAD_SERVICE --> KAFKA_UPLOAD[["Kafka Upload"]]
+    L7_REC --> REC_SERVICE["Recommendation Service<br>Python/Go"]
+    REC_SERVICE -- Делает запрос в Filler --> REC_ENGINE_SINGLE["Single Rec Engine"]
     L7_SEARCH --> SEARCH_SERVICE
-    SEARCH_SERVICE --> KAFKA_SEARCH[["Kafka Search"]] & REQUEST_FILLER["Search Request Filler App"]
+    SEARCH_SERVICE --> REQUEST_FILLER["Search Request Filler App"]
     KAFKA_AUTH --> PG_AUTH[("PostgreSQL<br>users")]
-    KAFKA_API --> ITEM_FEATURES_DB[("PostgreSQL<br>item_features")]
-    KAFKA_VIDEO --> PG_VIDEO[("PostgreSQL<br>videos")]
-    KAFKA_UPLOAD --> PG_VIDEO
-    KAFKA_SEARCH --> SEARCH_INDEX_DB[("PostgreSQL<br>search_index")]
-    SEARCH_APP["Simple Search App"] --> SEARCH_RANKER["Simple Ranker App"] & SEARCH_INDEX_DB & ES[("Elasticsearch<br>search_index")]
-    SEARCH_RANKER --> RANKING_MODELS_DB[("PostgreSQL<br>ranking_models")] & SEARCH_SERVICE & USERS_HISTORY_DB[("PostgreSQL<br>users_history")]
-    REQUEST_FILLER --> RECENT_SEARCHES_DB[("Redis<br>recent_searches")] & SEARCH_APP
-    KAFKA[["Kafka<br>События"]] --> ITEM_FEATURES_WORKER["Item Features Worker<br>Python"] & USER_ACTIVITY_WORKER["User Activity Worker<br>Python"] & RECENT_SEARCH_WORKER["Recent Search Worker<br>Python"] & TRAFFIC_MARKER_WORKER["Traffic Marker Worker"] & EVENTS_SERVICE["Events Service"] & PG_VIDEO
+    KAFKA_API -- Воркер после обработки и проверки переносит в бд --> ITEM_FEATURES_DB[("PostgreSQL<br>item_features")]
+    KAFKA_UPLOAD --> n3["Upload Worker"]
+    SEARCH_RANKER["Simple Ranker App"] --> RANKING_MODELS_DB[("PostgreSQL<br>ranking_models")] & SEARCH_SERVICE & SEARCH_INDEX_DB[("PostgreSQL<br>search_index")]
+    REQUEST_FILLER -- "<span style=background-color:>Получает историю запросов</span>" --> RECENT_SEARCHES_DB[("Redis<br>recent_searches")]
+    KAFKA[["Kafka<br>События"]] --> ITEM_FEATURES_WORKER["Item Features Worker<br>Python"] & USER_ACTIVITY_WORKER["User Activity Worker<br>Python"] & RECENT_SEARCH_WORKER["Recent Search Worker<br>Python"] & TRAFFIC_MARKER_WORKER["Traffic Marker Worker"] & EVENTS_SERVICE["Events Service"] & PG_VIDEO[("PostgreSQL<br>videos")]
     ITEM_FEATURES_WORKER --> ITEM_FEATURES_DB
     ITEM_FEATURES_DB --> SEARCH_INDEX_WORKER["Search Index Worker"] & TRAIN_RANKER_WORKER["Train Ranker Worker<br>Python"]
-    SEARCH_INDEX_WORKER --> SEARCH_INDEX_DB & ES
-    USER_ACTIVITY_WORKER --> USERS_HISTORY_DB
+    SEARCH_INDEX_WORKER --> SEARCH_INDEX_DB & ES[("Elasticsearch<br>search_index")]
+    USER_ACTIVITY_WORKER --> USERS_HISTORY_DB[("PostgreSQL<br>users_history")]
     RECENT_SEARCH_WORKER --> RECENT_SEARCHES_DB
     TRAFFIC_MARKER_WORKER --> RANKING_MODELS_DB
     USERS_HISTORY_DB --> TRAIN_RANKER_WORKER
     TRAIN_RANKER_WORKER --> RANKING_MODELS_DB
     EVENTS_SERVICE --> DWH_DB[("ClickHouse<br>analytics")]
-    ITEM_SERVER["Item Server"] --> SAMPLE_RANKER_APP["Sample Ranker App"]
     PROMETHEUS["Prometheus<br>Сбор метрик"] --> GRAFANA["Grafana<br>Дашборды"]
     n1 --> VIDEO_SERVICE
     n2["Api Upload Video<br>Services"] --> KAFKA & PROMETHEUS
-    REC_ENGINE_RANKER["Simple Ranker App"] --> REC_SERVICE
-    REC_ENGINE_SINGLE --> REC_ENGINE_RANKER & REDIS_REC[("Redis<br>rec_cache")] & ITEM_FEATURES_DB
+    REC_ENGINE_RANKER["Simple Ranker App"] -- Возвращает рекомендации --> REC_SERVICE
+    REC_ENGINE_SINGLE -- Отправляет кандидатов в Ranker --> REC_ENGINE_RANKER
+    REC_ENGINE_SINGLE --> REDIS_REC[("Redis<br>rec_cache")] & ITEM_FEATURES_DB & USERS_HISTORY_DB
     REDIS_REC --> REC_ENGINE_RANKER
-    REC_ENGINE_SINGLE --> USERS_HISTORY_DB
+    n3 --> MINIO & PG_VIDEO
+    REQUEST_FILLER -- Отправляет на 2ой уровень --> SEARCH_RANKER
     n1@{ shape: rect}
     n2@{ shape: diam}
      EXT_USER:::external
@@ -698,42 +656,37 @@ flowchart TB
      REDIS:::storage
      KAFKA_AUTH:::queue
      API_SERVICE:::service
-     REC_SERVICE:::recommendation
      SEARCH_SERVICE:::service
      KAFKA_API:::queue
      VIDEO_SERVICE:::service
      MINIO:::storage
-     KAFKA_VIDEO:::queue
      KAFKA_UPLOAD:::queue
+     REC_SERVICE:::recommendation
      REC_ENGINE_SINGLE:::recommendation
-     KAFKA_SEARCH:::queue
      REQUEST_FILLER:::search
      PG_AUTH:::storage
      ITEM_FEATURES_DB:::search
-     PG_VIDEO:::storage
-     SEARCH_INDEX_DB:::search
-     SEARCH_APP:::search
+     n3:::external
      SEARCH_RANKER:::search
-     ES:::storage
      RANKING_MODELS_DB:::search
      USERS_HISTORY_DB:::search
+     SEARCH_INDEX_DB:::search
      RECENT_SEARCHES_DB:::search
      KAFKA:::queue
      ITEM_FEATURES_WORKER:::ml
      USER_ACTIVITY_WORKER:::ml
      RECENT_SEARCH_WORKER:::ml
      TRAFFIC_MARKER_WORKER:::ml
+     PG_VIDEO:::storage
      SEARCH_INDEX_WORKER:::ml
      TRAIN_RANKER_WORKER:::ml
+     ES:::storage
      DWH_DB:::search
-     ITEM_SERVER:::service
-     SAMPLE_RANKER_APP:::search
      PROMETHEUS:::monitoring
      GRAFANA:::monitoring
      n2:::service
      REC_ENGINE_RANKER:::recommendation
      REDIS_REC:::storage
-    classDef external fill:#e1f5fe
     classDef loadbalancer fill:#f3e5f5
     classDef storage fill:#fff3e0
     classDef queue fill:#fce4ec
@@ -742,9 +695,127 @@ flowchart TB
     classDef recommendation fill:#f3e5f5
     classDef search fill:#fff0f0
     classDef service fill:#e8f5e8
+    classDef external fill:#e1f5fe
     style n2 stroke:#000000,fill:#C8E6C9
 
 ```
+
+# 11
+
+## RPS по сервисам
+
+| Сервис | Средний RPS | Пиковый RPS |
+|--------|-------------|-------------|
+| Auth Service | 1,155 | 3,465 |
+| Video Service | 2,117 | 6,351 |
+| API Service | 2,315 | 6,945 |
+| Recommendation Service | 2,315 | 6,945 |
+| Search Service | 231 | 693 |
+| Upload Service | 4.3 | 13 |
+| Итого | 8,137 | 24,412 |
+
+## Ресурсы микросервисов (Go)
+
+| Сервис | CPU (cores) | RAM (GB) | Replicas |
+|--------|-------------|----------|----------|
+| Auth Service | 6.9 | 13.8 | 7 |
+| Video Service | 12.7 | 25.4 | 13 |
+| API Service | 13.9 | 27.8 | 14 |
+| Recommendation Service | 13.9 | 27.8 | 14 |
+| Search Service | 1.4 | 2.8 | 2 |
+| Upload Service | 0.03 | 0.06 | 1 |
+| Итого | 48.8 | 97.7 | 51 |
+
+## Базы данных
+
+### PostgreSQL
+- Нагрузка: 30,000 QPS
+- Серверов: 12
+- CPU: 180 ядер (15 ядер на сервер)
+- RAM: 3 ТБ (256 ГБ на сервер)
+
+### Redis
+- Нагрузка: 300,000 QPS  
+- Серверов: 8
+- CPU: 16 ядер (2 ядра на сервер)
+- RAM: 256 ГБ (32 ГБ на сервер)
+
+### ClickHouse
+- Нагрузка: 3,000 QPS
+- Серверов: 4
+- CPU: 32 ядер (8 ядер на сервер)
+- RAM: 256 ГБ (64 ГБ на сервер)
+
+### Elasticsearch
+- Нагрузка: 693 RPS
+- Серверов: 6
+- CPU: 48 ядер (8 ядер на сервер)
+- RAM: 192 ГБ (32 ГБ на сервер)
+
+## Очереди и воркеры
+
+### Kafka
+- Брокеров: 8 серверов
+- Нагрузка: 10,000 RPS
+- CPU: 48 ядер (6 ядер на брокер)
+- RAM: 256 ГБ (32 ГБ на брокер)
+
+### Workers
+| Worker | Нагрузка | CPU | RAM | Replicas |
+|--------|----------|-----|-----|----------|
+| Item Features Worker | 3,000 RPS | 15 | 30 GB | 6 |
+| User Activity Worker | 4,500 RPS | 22.5 | 45 GB | 9 |
+| Recent Search Worker | 346 RPS | 1.7 | 3.5 GB | 2 |
+| Traffic Marker Worker | 1,500 RPS | 7.5 | 15 GB | 3 |
+| Search Index Worker | 750 RPS | 3.8 | 7.5 GB | 2 |
+| Train Ranker Worker | 300 RPS | 3 | 12 GB | 1 |
+| Итого | 10,396 RPS | 53.5 | 113 GB | 23 |
+
+## Хранилище (MinIO)
+
+| Параметр | Значение |
+|----------|----------|
+| Серверов | 48 |
+| Текущий объём | 2,234 ПБ |
+| Чтение QPS | 1.43 млн |
+| CPU | 286 ядер (6 ядер на сервер) |
+| RAM | 1.5 ТБ (32 ГБ на сервер) |
+
+## GPU кластер
+
+| Назначение | GPU Тип | Серверы | CPU | RAM | VRAM |
+|------------|---------|---------|-----|-----|------|
+| Транскрибация | A100 80GB | 6 | 96 ядер | 768 ГБ | 960 ГБ |
+| Компьютерное зрение | RTX 4090 | 4 | 64 ядер | 512 ГБ | 192 ГБ |
+| Эмбеддинги | A100 40GB | 3 | 48 ядер | 384 ГБ | 240 ГБ |
+| Итого | | 13 | 208 ядер | 1.66 ТБ | 1.392 ТБ |
+
+## Итоговая инфраструктура
+
+| Компонент | Серверы | Всего CPU | Всего RAM |
+|-----------|---------|-----------|-----------|
+| Kubenodes | 18 | 576 ядер | 2.3 ТБ |
+| PostgreSQL | 12 | 180 ядер | 3 ТБ |
+| Redis | 8 | 16 ядер | 256 ГБ |
+| Kafka | 8 | 48 ядер | 256 ГБ |
+| ClickHouse | 4 | 32 ядер | 256 ГБ |
+| Elasticsearch | 6 | 48 ядер | 192 ГБ |
+| MinIO | 48 | 288 ядер | 1.5 ТБ |
+| GPU серверы | 13 | 208 ядер | 1.66 ТБ |
+| Всего | 117 | 1,396 ядер | ~9.2 ТБ |
+
+## Стоимость инфраструктуры
+
+| Компонент | Стоимость/мес |
+|-----------|---------------|
+| Kubenodes (18 × $800) | $14,400 |
+| Базы данных (30 × $600) | $18,000 |
+| Kafka (8 × $500) | $4,000 |
+| MinIO (48 × $400) | $19,200 |
+| GPU (13 × $2,400) | $31,200 |
+| CDN/Сеть | $10,000 |
+| Итого | $96,800/месяц |
+
 
 [1]: https://tass.ru/ekonomika/24311321 "Источник"
 [2]: https://inclient.ru/rutube-stats/#rutube3 "Не уверен верить ли источнику"
