@@ -462,99 +462,90 @@ VS:::shard
 | MinIO               | Snapshot replication | раз в сутки            | отдельный кластер  |
 | Конфиги (YAML, env) | Git + S3 backup      | при деплое             | Git / S3           |
 
-
-# 7. Алгоритмы
-
-## 7.1. Алгоритм адаптивного стриминга (HLS/DASH)
+## Алгоритмы 
+### 7.1. Алгоритм адаптивного стриминга (HLS/DASH)
 
 **Область применения:** Просмотр видео
 
-**Назначение:** Обеспечение плавного просмотра при различном качестве интернет-соединения пользователя.
+**Назначение:** Обеспечение **плавного просмотра** при различном качестве интернет-соединения пользователя.
 
 **Принцип работы:**
 
-### Подготовка контента:
-- Видео заранее кодируется в несколько качеств (1080p, 720p, 480p, 360p)
-- Каждая версия нарезается на короткие чанки продолжительностью 2-10 секунд
-- Формируется манифест-файл с информацией о всех доступных чанках и их качестве
-
-### Инициализация просмотра:
-- Плеер загружает манифест и начинает воспроизведение со среднего качества
-- Одновременно оценивается скорость сети и стабильность соединения
-
-### Динамическая адаптация:
-- Алгоритм постоянно мониторит:
-  - Скорость загрузки чанков
-  - Уровень заполнения буфера воспроизведения
-  - Частоту потерь пакетов
-- На основе этих метрик выбирает оптимальное качество для следующего чанка
-- При ухудшении связи - переключается на более низкое качество
-- При улучшении - постепенно повышает качество
-
-
-## 7.2. Алгоритм автоматического анализа видеоконтента
-
-**Пайплайн обработки:**
-1. **Поступление видео** → Upload Service кладет видео в MinIO и отправляет событие в Kafka Upload
-2. **Очередь обработки** → Video Service получает событие, создает задачу в Kafka Video
-3. **Воркеры анализа** → 
-   - Компьютерное зрение: YOLOv8 (объекты), CLIP (сцены), OCR (текст)
-   - Аудиоанализ: Whisper (транскрипция), YAMNet (звуки)
-   - Текст: BERT (теги), CatBoost (категории)
-4. **Обогащение метаданных** → результаты пишутся в PostgreSQL videos через Kafka
-5. **Индексация для поиска** → Search Index Worker обновляет Elasticsearch
-
-**Результат:** автоматические теги, категории, транскрипты для поиска и рекомендаций
+* **Подготовка контента:** Видео заранее кодируется в несколько качеств (1080p, 720p и т.д.). Каждая версия нарезается на короткие **чанки** (2-10 секунд). Формируется **манифест-файл**.
+* **Инициализация просмотра:** Плеер загружает манифест и начинает воспроизведение со среднего качества. Оценивается скорость сети.
+* **Динамическая адаптация:** Алгоритм постоянно мониторит скорость загрузки чанков, уровень заполнения буфера и частоту потерь пакетов. На основе этих метрик **выбирается оптимальное качество** для следующего чанка.
+    * При ухудшении связи -> переключение на более **низкое** качество (Graceful Degradation).
+    * При улучшении -> постепенное **повышение** качества.
 
 ---
 
-## 7.3. Алгоритм персонализированных рекомендаций
+### 7.2. Алгоритм автоматического анализа видеоконтента
+
+**Пайплайн обработки:**
+
+1.  **Поступление видео** -> Upload Service кладет видео в MinIO и отправляет событие в Kafka Upload
+2.  **Очередь обработки** -> Video Service получает событие, создает задачу в Kafka Video
+3.  **Воркеры анализа** ->
+    * Компьютерное зрение: **YOLOv8** (объекты), **CLIP** (сцены), **OCR** (текст)
+    * Аудиоанализ: **Whisper** (транскрипция)
+    * Текст: **BERT** (семантические теги, работает поверх транскрипции), **CatBoost** (категории)
+4.  **Обогащение метаданных** -> результаты пишутся в PostgreSQL `videos` через Kafka
+5.  **Индексация для поиска** -> Search Index Worker обновляет Elasticsearch
+
+**Результат:** автоматические теги, категории, транскрипты для поиска и рекомендаций.
+
+---
+
+### 7.3. Алгоритм персонализированных рекомендаций
 
 **Двухуровневая архитектура:**
 
-**Level 1 - Кандидаты:**
-- API Service → Recommendation Service → Single Rec Engine
-- Источники кандидатов:
-  - Content-based: похожие видео (Item Features DB)
-  - Collaborative: похожие пользователи (Users History DB) 
-  - Trending: популярное (Redis rec_cache)
-  - Fresh: новое (PostgreSQL videos)
+#### Level 1 - Кандидаты:
+Сбор потенциально релевантных видео.
 
-**Level 2 - Ранжирование:**
-- Single Rec Engine → Simple Ranker App
-- Модели: Two-Tower (семантика), DeepFM (признаки), ALS (коллаборация)
-- Контекст: история пользователя, время, устройство
+* API Service -> Recommendation Service -> Single Rec Engine
+* **Источники кандидатов:**
+    * **Content-based:** похожие видео (Item Features DB)
+    * **Collaborative:** похожие пользователи (Users History DB)
+    * **Trending:** популярное (Redis `rec_cache`)
+    * **Fresh:** новое (PostgreSQL `videos`)
+
+#### Level 2 - Ранжирование:
+Упорядочивание кандидатов по релевантности.
+
+* Single Rec Engine -> **ML Ranking Module**
+* **Модели:** Two-Tower (семантика), DeepFM (признаки), ALS (коллаборация)
+* **Контекст:** история пользователя, время, устройство
 
 **Обучение моделей:**
-- User Activity Worker → Users History DB
-- Train Ranker Worker обучает модели → Ranking Models DB
+* User Activity Worker -> Users History DB
+* Train Ranker Worker обучает модели -> Ranking Models DB
 
 ---
 
-## 7.4. Алгоритм полнотекстового поиска
+### 7.4. Алгоритм полнотекстового поиска 🔎
 
 **Поисковый пайплайн:**
 
-**Индексация:**
-1. Video Service/Upload Service → Kafka → Search Index Worker
-2. Данные для индекса:
-   - Базовые метаданные (название, описание)
-   - Автоматические теги (из анализа контента)
-   - Транскрипты речи (Whisper)
-   - Визуальные признаки (CLIP)
-3. Индекс: Elasticsearch + PostgreSQL search_index
+#### Индексация:
+1.  Video Service/Upload Service -> Kafka -> Search Index Worker
+2.  **Данные для индекса:** Базовые метаданные (название, описание), Автоматические теги, Транскрипты речи (Whisper), Визуальные признаки (CLIP).
+3.  **Индекс:** Elasticsearch + PostgreSQL `search_index`
 
-**Поисковый запрос:**
-1. Пользователь → L7 search → Search Service
-2. Request Filler обогащает запрос (история из Redis)
-3. Search App ищет кандидатов (Elasticsearch + PostgreSQL)
-4. Simple Ranker ранжирует (модели из Ranking Models DB)
+#### Поисковый запрос:
+1.  Пользователь -> L7 search -> Search Service
+2.  Request Filler обогащает запрос (история из Redis)
+3.  Search App ищет кандидатов (Elasticsearch + PostgreSQL)
+4.  **ML Ranking Module** ранжирует (модели из Ranking Models DB)
 
 **Модели поиска:**
-- Текст: BM25 + Sentence-BERT
-- Визуал: CLIP эмбеддинги
-- Ранжирование: LambdaMART
-## 7.5. Алгоритм сегментации и кодирования видео
+* Текст: **BM25** + **Sentence-BERT**
+* Визуал: **CLIP** эмбеддинги
+* Ранжирование: **LambdaMART**
+
+---
+
+### 7.5. Алгоритм сегментации и кодирования видео 📦
 
 **Область применения:** Обработка загружаемых видео
 
@@ -562,24 +553,13 @@ VS:::shard
 
 **Принцип работы:**
 
-### Прием загрузки:
-- Пользователь загружает видеофайл
-- Файл проверяется на безопасность и валидность
-- Видео помещается в очередь обработки
+* **Прием загрузки:** Проверка файла на безопасность и валидность, помещение в очередь.
+* **Параллельная обработка:**
+    * **Кодирование в multiple bitrate** (создание версий разного качества).
+    * **Контент-анализ** (запуск алгоритма 7.2).
+* **Сегментация на чанки:** Нарезка каждой версии качества на сегменты (2-10 секунд) и формирование плейлистов/манифестов.
+* **Синхронизация метаданных:** Результаты контент-анализа сохраняются в БД, обновляются поисковые индексы. Видео становится доступным.
 
-### Параллельная обработка:
-- **Кодирование в multiple bitrate:** создание версий разного качества
-- **Контент-анализ:** запуск алгоритма автоматического анализа видеоконтента
-- Обе процессы выполняются параллельно для ускорения обработки
-
-### Сегментация на чанки:
-- Каждая версия качества нарезается на сегменты по 2-10 секунд
-- Формируются плейлисты и манифесты для адаптивного стриминга
-
-### Синхронизация метаданных:
-- Результаты контент-анализа сохраняются в базу данных
-- Обновляются поисковые индексы
-- Видео становится доступным для поиска и рекомендаций
 # 8 Технологии
 
 | Технология | Область применения | Обоснование выбора |
@@ -602,102 +582,115 @@ config:
   layout: dagre
 ---
 flowchart TB
+ subgraph L7["L7: виртуальные хосты"]
+    direction LR
+        L7_AUTH["l7: auth"]
+        L7_EDGE["L7 Ingress / API Gateway<br>Traefik / Kong<br>(Rate Limiting, Retries)"]
+        L7_API["l7: api"]
+        L7_REC["l7: rec"]
+        L7_SEARCH["l7: search"]
+        L7_VIDEO["l7: video"]
+        L7_UPLOAD["l7: upload"]
+  end
+ subgraph CORE["Backend Services (Stateless K8s Pods)"]
+    direction TB
+        AUTH_SERVICE["Auth Service<br>Go"]
+        API_SERVICE["API Service<br>Go"]
+        VIDEO_SERVICE["Video Service<br>Go"]
+        UPLOAD_SERVICE["Upload Service<br>Go"]
+        REC_SERVICE["Recommendation Service<br><br>"]
+        SEARCH_SERVICE["Search Service<br>(Fallback logic)"]
+  end
+ subgraph KAFKA_CLUSTER["Kafka Cluster (HA 3+ brokers)"]
+    direction LR
+        KAFKA_AUTH[["kafka: auth"]]
+        KAFKA_API[["kafka: api"]]
+        KAFKA_UPLOAD[["kafka: upload"]]
+        KAFKA_EVENTS[["kafka: events"]]
+        DLQ_UPLOAD[["DLQ: upload.errors"]]
+        DLQ_API[["DLQ: api.errors"]]
+  end
+ subgraph WORKERS["Workers (Auto-scaling)"]
+    direction TB
+        UPLOAD_WORKER["Upload Worker"]
+        ITEM_FEATURES_WORKER["Item Features Worker"]
+        USER_ACTIVITY_WORKER["User Activity Worker"]
+        RECENT_SEARCH_WORKER["Recent Search Worker"]
+        TRAFFIC_MARKER_WORKER["Traffic Marker Worker"]
+        SEARCH_INDEX_WORKER["Search Index Worker"]
+        TRAIN_RANKER_WORKER["Train Ranker Worker"]
+        SIMPLE_RANKER["Simple Ranker"]
+  end
+ subgraph STORAGE["Хранилища (Primary + Replicas)"]
+    direction LR
+        MINIO[("MinIO Cluster<br>(Erasure Coding)")]
+        PG_VIDEO[("PG: Video<br>(Master + Read Replicas)")]
+        PG_AUTH[("PG: Users<br>(Master + Standby)")]
+        ITEM_FEATURES_DB[("PG: Features")]
+        RANKING_MODELS_DB[("PG: Models")]
+        REDIS_SESS[("Redis Cluster<br>Sessions")]
+        REDIS_REC[("Redis Cluster<br>Top/Popular Cache")]
+        ES[("Elasticsearch Cluster<br>Search Index")]
+        DWH_DB[("ClickHouse Shards")]
+  end
     EXT_USER["Пользователь"] --> ANYCAST["Anycast IP<br>Ближайший ДЦ"]
-    ANYCAST --> L4_EXT["L4 Балансировщик<br>HAProxy"]
-    L4_EXT --> CDN["CDN<br>Статика, чанки видео"] & L7_AUTH["L7: auth.rutube.ru"] & L7_API["L7: api.rutube.ru"] & L7_REC["L7: rec.rutube.ru"] & L7_SEARCH["L7: search.rutube.ru"] & n1["L7: video.rutube.ru"] & UPLOAD_SERVICE["Upload Service<br>Go"]
-    L7_AUTH --> AUTH_SERVICE["Auth Service<br>Go"]
-    AUTH_SERVICE --> REDIS[("Redis<br>sessions")] & KAFKA_AUTH[["Kafka Auth"]]
-    L7_API -- Взаиомдействие с лайками, просмотрами и комментариями --> API_SERVICE["API Service<br>Go"]
-    API_SERVICE --> SEARCH_SERVICE["Search Service<br>Go"]
-    API_SERVICE -- Api Кладёт все действия в кафку --> KAFKA_API[["Kafka API"]]
-    VIDEO_SERVICE["Video Service<br>Go"] --> MINIO[("MinIO<br>video_files")]
-    UPLOAD_SERVICE --> KAFKA_UPLOAD[["Kafka Upload"]]
-    L7_REC --> REC_SERVICE["Recommendation Service<br>Python/Go"]
-    REC_SERVICE -- Делает запрос в Filler --> REC_ENGINE_SINGLE["Single Rec Engine"]
+    ANYCAST --> L4_EXT["L4 Балансировщик<br>HAProxy (Active/Passive)"]
+    L4_EXT --> L7_EDGE
+    L7_EDGE --> L7_AUTH & L7_API & L7_REC & L7_SEARCH & L7_VIDEO & L7_UPLOAD
+    L7_AUTH --> AUTH_SERVICE
+    L7_API --> API_SERVICE
+    L7_VIDEO --> VIDEO_SERVICE
+    L7_UPLOAD --> UPLOAD_SERVICE
+    L7_REC --> REC_SERVICE
     L7_SEARCH --> SEARCH_SERVICE
-    SEARCH_SERVICE --> REQUEST_FILLER["Search Request Filler App"]
-    KAFKA_AUTH --> PG_AUTH[("PostgreSQL<br>users")]
-    KAFKA_API -- Воркер после обработки и проверки переносит в бд --> ITEM_FEATURES_DB[("PostgreSQL<br>item_features")]
-    KAFKA_UPLOAD --> n3["Upload Worker"]
-    SEARCH_RANKER["Simple Ranker App"] --> RANKING_MODELS_DB[("PostgreSQL<br>ranking_models")] & SEARCH_SERVICE & SEARCH_INDEX_DB[("PostgreSQL<br>search_index")]
-    REQUEST_FILLER -- "<span style=background-color:>Получает историю запросов</span>" --> RECENT_SEARCHES_DB[("Redis<br>recent_searches")]
-    KAFKA[["Kafka<br>События"]] --> ITEM_FEATURES_WORKER["Item Features Worker<br>Python"] & USER_ACTIVITY_WORKER["User Activity Worker<br>Python"] & RECENT_SEARCH_WORKER["Recent Search Worker<br>Python"] & TRAFFIC_MARKER_WORKER["Traffic Marker Worker"] & EVENTS_SERVICE["Events Service"] & PG_VIDEO[("PostgreSQL<br>videos")]
+    AUTH_SERVICE --> REDIS_SESS & KAFKA_AUTH
+    API_SERVICE --> REDIS_SESS & PG_VIDEO
+    API_SERVICE -- Async events --> KAFKA_API
+    UPLOAD_SERVICE --> KAFKA_UPLOAD
+    KAFKA_UPLOAD --> UPLOAD_WORKER
+    UPLOAD_WORKER -- Error limit exceeded --> DLQ_UPLOAD
+    UPLOAD_WORKER --> MINIO & PG_VIDEO & KAFKA_EVENTS
+    VIDEO_SERVICE --> MINIO & API_SERVICE
+    API_SERVICE -- CDN URL --> CDN["CDN"]
+    SEARCH_SERVICE --> ES & SEARCH_INDEX_WORKER & REQUEST_FILLER["Request Filler"]
+    ES --> SEARCH_SERVICE
+    SEARCH_INDEX_WORKER --> ES
+    REQUEST_FILLER --> RECENT_SEARCHES_DB["Redis: recent"]
+    SEARCH_SERVICE -. [Fallback] ES Down/Slow:<br>Search in DB (Slow but works) .-> PG_VIDEO
+    SEARCH_SERVICE -. [Fallback] Empty/Error:<br>Return Recent/Trending .-> RECENT_SEARCHES_DB
+    REC_SERVICE --> REC_ENGINE_SINGLE["Candidate Generator"] & API_SERVICE
+    REC_ENGINE_SINGLE --> ITEM_FEATURES_DB & REDIS_REC
+    REC_SERVICE -. </br> .-> REDIS_REC
+    REDIS_REC --> SIMPLE_RANKER
+    SIMPLE_RANKER --> REC_SERVICE
+    KAFKA_API --> ITEM_FEATURES_WORKER & USER_ACTIVITY_WORKER
+    USER_ACTIVITY_WORKER -- On Error --> DLQ_API
+    KAFKA_EVENTS --> EVENTS_SERVICE["Events Service"]
+    EVENTS_SERVICE --> DWH_DB
     ITEM_FEATURES_WORKER --> ITEM_FEATURES_DB
-    ITEM_FEATURES_DB --> SEARCH_INDEX_WORKER["Search Index Worker"] & TRAIN_RANKER_WORKER["Train Ranker Worker<br>Python"]
-    SEARCH_INDEX_WORKER --> SEARCH_INDEX_DB & ES[("Elasticsearch<br>search_index")]
-    USER_ACTIVITY_WORKER --> USERS_HISTORY_DB[("PostgreSQL<br>users_history")]
+    USER_ACTIVITY_WORKER --> PG_VIDEO
     RECENT_SEARCH_WORKER --> RECENT_SEARCHES_DB
-    TRAFFIC_MARKER_WORKER --> RANKING_MODELS_DB
-    USERS_HISTORY_DB --> TRAIN_RANKER_WORKER
     TRAIN_RANKER_WORKER --> RANKING_MODELS_DB
-    EVENTS_SERVICE --> DWH_DB[("ClickHouse<br>analytics")]
-    PROMETHEUS["Prometheus<br>Сбор метрик"] --> GRAFANA["Grafana<br>Дашборды"]
-    n1 --> VIDEO_SERVICE
-    n2["Api Upload Video<br>Services"] --> KAFKA & PROMETHEUS
-    REC_ENGINE_RANKER["Simple Ranker App"] -- Возвращает рекомендации --> REC_SERVICE
-    REC_ENGINE_SINGLE -- Отправляет кандидатов в Ranker --> REC_ENGINE_RANKER
-    REC_ENGINE_SINGLE --> REDIS_REC[("Redis<br>rec_cache")] & ITEM_FEATURES_DB & USERS_HISTORY_DB
-    REDIS_REC --> REC_ENGINE_RANKER
-    n3 --> MINIO & PG_VIDEO
-    REQUEST_FILLER -- Отправляет на 2ой уровень --> SEARCH_RANKER
-    n1@{ shape: rect}
-    n2@{ shape: diam}
-     EXT_USER:::external
-     ANYCAST:::external
-     L4_EXT:::loadbalancer
-     CDN:::external
-     L7_AUTH:::loadbalancer
-     L7_API:::loadbalancer
-     L7_REC:::loadbalancer
-     L7_SEARCH:::loadbalancer
-     n1:::loadbalancer
-     UPLOAD_SERVICE:::service
-     AUTH_SERVICE:::service
-     REDIS:::storage
-     KAFKA_AUTH:::queue
-     API_SERVICE:::service
-     SEARCH_SERVICE:::service
-     KAFKA_API:::queue
-     VIDEO_SERVICE:::service
-     MINIO:::storage
-     KAFKA_UPLOAD:::queue
-     REC_SERVICE:::recommendation
-     REC_ENGINE_SINGLE:::recommendation
-     REQUEST_FILLER:::search
-     PG_AUTH:::storage
-     ITEM_FEATURES_DB:::search
-     n3:::external
-     SEARCH_RANKER:::search
-     RANKING_MODELS_DB:::search
-     USERS_HISTORY_DB:::search
-     SEARCH_INDEX_DB:::search
-     RECENT_SEARCHES_DB:::search
-     KAFKA:::queue
-     ITEM_FEATURES_WORKER:::ml
-     USER_ACTIVITY_WORKER:::ml
-     RECENT_SEARCH_WORKER:::ml
-     TRAFFIC_MARKER_WORKER:::ml
-     PG_VIDEO:::storage
-     SEARCH_INDEX_WORKER:::ml
-     TRAIN_RANKER_WORKER:::ml
-     ES:::storage
-     DWH_DB:::search
-     PROMETHEUS:::monitoring
-     GRAFANA:::monitoring
-     n2:::service
-     REC_ENGINE_RANKER:::recommendation
-     REDIS_REC:::storage
-    classDef loadbalancer fill:#f3e5f5
-    classDef storage fill:#fff3e0
-    classDef queue fill:#fce4ec
-    classDef monitoring fill:#e8f5e8
-    classDef ml fill:#e1f5fe
-    classDef recommendation fill:#f3e5f5
-    classDef search fill:#fff0f0
-    classDef service fill:#e8f5e8
-    classDef external fill:#e1f5fe
-    style n2 stroke:#000000,fill:#C8E6C9
+    TRAFFIC_MARKER_WORKER --> RANKING_MODELS_DB
+    PG_VIDEO -. Read Replicas .-> API_SERVICE & SEARCH_SERVICE
+    PROMETHEUS["Prometheus"] -.-> CORE & WORKERS
+    PROMETHEUS --> GRAFANA["Grafana"]
+    KAFKA_AUTH --- KAFKA_CLUSTER
+    KAFKA_API --- KAFKA_CLUSTER
+    KAFKA_UPLOAD --- KAFKA_CLUSTER
 
+     DLQ_UPLOAD:::dlq
+     DLQ_API:::dlq
+     MINIO:::storage
+     PG_VIDEO:::storage
+     PG_AUTH:::storage
+     REDIS_SESS:::storage
+     REDIS_REC:::storage
+     ES:::storage
+     DWH_DB:::storage
+    classDef storage fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef fallback stroke:#d32f2f,stroke-width:2px,stroke-dasharray: 5 5,color:#d32f2f
+    classDef dlq fill:#ffcdd2,stroke:#b71c1c
 ```
 
 # 11
